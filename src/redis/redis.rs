@@ -1,9 +1,81 @@
-use super::Result;
+use std::io::{self, Cursor, Seek, SeekFrom};
+
+use crate::redis::RedisError;
+
+use super::{
+    cmd::Command,
+    resp::{StringValue, Value},
+    Result,
+};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::ToSocketAddrs,
 };
-use tracing::{debug, info};
+use tracing::{debug, error, info};
+
+struct Buffer<W> {
+    inner: W,
+    count: usize,
+}
+
+impl<W> Buffer<W>
+where
+    W: io::Write,
+{
+    fn new(inner: W) -> Self {
+        Self { inner, count: 0 }
+    }
+}
+
+impl<W> io::Write for Buffer<W>
+where
+    W: io::Write,
+{
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let len = self.inner.write(buf)?;
+        self.count += len;
+        Ok(len)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+async fn handle_command(stream: &mut tokio::net::TcpStream, cmd: Command) -> Result<()> {
+    info!("handling {cmd:?}");
+
+    let resp = match cmd {
+        Command::Ping(msg) => {
+            if let Some(msg) = msg {
+                Value::Array(vec![
+                    Value::Str(StringValue::Bulk("PONG".to_owned())),
+                    Value::Str(StringValue::Bulk(msg)),
+                ])
+            } else {
+                Value::Str(StringValue::Simple("PONG".to_owned()))
+            }
+        }
+
+        Command::Echo(msg) => Value::Str(StringValue::Bulk(msg)),
+    };
+
+    debug!("sending response {resp:?}");
+
+    let mut buf = Buffer::new(Cursor::new(Vec::new()));
+    resp.encode(&mut buf)?;
+
+    let count = buf.count;
+    let buf = buf.inner.into_inner();
+
+    let buf = &buf[..count];
+
+    debug!("sending {:?}", buf);
+
+    stream.write(buf).await?;
+
+    Ok(())
+}
 
 async fn handle_connection(mut stream: tokio::net::TcpStream) -> Result<()> {
     let mut buf = [0u8; 512];
@@ -16,7 +88,18 @@ async fn handle_connection(mut stream: tokio::net::TcpStream) -> Result<()> {
         }
 
         debug!("received {:?}", &buf[..bytes]);
-        stream.write(b"+PONG\r\n").await?;
+
+        let res = match std::str::from_utf8(&buf[..bytes]) {
+            Ok(resp) => match resp.parse::<Command>() {
+                Ok(cmd) => handle_command(&mut stream, cmd).await,
+                Err(e) => Err(e),
+            },
+            Err(_) => Err(RedisError::Utf8Error),
+        };
+
+        if let Err(e) = res {
+            error!("failed to handle message: {e}");
+        }
     }
 
     Ok(())
