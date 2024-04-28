@@ -49,6 +49,9 @@ pub enum StringValue {
 
     /// A bulk string represents a single binary string. The string can be of any size, but by default, Redis limits it to 512 MB
     Bulk(String),
+
+    /// A null string
+    Null,
 }
 
 impl StringValue {
@@ -62,12 +65,14 @@ impl StringValue {
                 let len = str.len();
                 write!(buf, "${len}\r\n{str}")
             }
+            Self::Null => write!(buf, "$-1"),
         }?)
     }
 
-    pub fn as_str(&self) -> &str {
+    pub fn as_str(&self) -> Option<&str> {
         match self {
-            Self::Simple(str) | Self::Bulk(str) => str.as_str(),
+            Self::Simple(str) | Self::Bulk(str) => Some(str.as_str()),
+            _ => None,
         }
     }
 }
@@ -112,6 +117,13 @@ impl Value {
         }?;
 
         Ok(())
+    }
+
+    pub fn as_str(&self) -> Option<&str> {
+        match self {
+            Self::Str(str) => str.as_str(),
+            _ => None,
+        }
     }
 }
 
