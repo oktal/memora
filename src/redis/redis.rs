@@ -1,18 +1,18 @@
-use std::io;
+use super::Result;
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::ToSocketAddrs,
+};
+use tracing::{debug, info};
 
-use thiserror::Error;
-use tokio::net::ToSocketAddrs;
-use tracing::info;
+async fn handle_connection(mut stream: tokio::net::TcpStream) -> Result<()> {
+    let mut buf = [0u8; 512];
+    let bytes = stream.read(&mut buf).await?;
 
-#[derive(Debug, Error)]
-pub enum RedisError {
-    #[error("{0}")]
-    Io(#[from] io::Error),
-}
+    debug!("received {:?}", &buf[..bytes]);
 
-pub type Result<T> = std::result::Result<T, RedisError>;
+    stream.write(b"+PONG\r\n").await?;
 
-async fn handle_connection(_stream: tokio::net::TcpStream) -> Result<()> {
     Ok(())
 }
 
