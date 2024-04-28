@@ -7,11 +7,17 @@ use tracing::{debug, info};
 
 async fn handle_connection(mut stream: tokio::net::TcpStream) -> Result<()> {
     let mut buf = [0u8; 512];
-    let bytes = stream.read(&mut buf).await?;
 
-    debug!("received {:?}", &buf[..bytes]);
+    loop {
+        let bytes = stream.read(&mut buf).await?;
 
-    stream.write(b"+PONG\r\n").await?;
+        if bytes == 0 {
+            break;
+        }
+
+        debug!("received {:?}", &buf[..bytes]);
+        stream.write(b"+PONG\r\n").await?;
+    }
 
     Ok(())
 }
