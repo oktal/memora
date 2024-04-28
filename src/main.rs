@@ -1,22 +1,22 @@
 // Uncomment this block to pass the first stage
 // use std::net::TcpListener;
 
-fn main() {
-    // You can use print statements as follows for debugging, they'll be visible when running tests.
-    println!("Logs from your program will appear here!");
+use redis::Redis;
+use tracing::info;
 
-    // Uncomment this block to pass the first stage
-    //
-    // let listener = TcpListener::bind("127.0.0.1:6379").unwrap();
-    //
-    // for stream in listener.incoming() {
-    //     match stream {
-    //         Ok(_stream) => {
-    //             println!("accepted new connection");
-    //         }
-    //         Err(e) => {
-    //             println!("error: {}", e);
-    //         }
-    //     }
-    // }
+mod redis;
+
+const DEFAULT_HOSTNAME: &str = "127.0.0.1";
+const DEFAULT_PORT: u16 = 6379;
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    tracing_subscriber::fmt::init();
+
+    info!("binding to {DEFAULT_HOSTNAME}:{DEFAULT_PORT}");
+
+    let redis = Redis::new((DEFAULT_HOSTNAME, DEFAULT_PORT)).await?;
+    redis.start().await?;
+
+    Ok(())
 }
