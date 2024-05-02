@@ -1,11 +1,51 @@
 use std::{str::FromStr, time::Duration};
 
+use chrono::{DateTime, TimeDelta, Utc};
 use logos::Logos;
 
 use super::{
     resp::{Parser, Token, Value},
     CommandError, GetError, RedisError, Result, SetError,
 };
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum Time {
+    Seconds(u64),
+    Millis(u64),
+}
+
+impl Into<Duration> for Time {
+    fn into(self) -> Duration {
+        match self {
+            Self::Seconds(secs) => Duration::from_secs(secs),
+            Self::Millis(millis) => Duration::from_millis(millis),
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum Expiry {
+    Time(Time),
+    Unix(Time),
+}
+
+impl Expiry {
+    /// Turn this raw expiry time a UTC [`chrono::DateTime`]
+    pub(crate) fn into_utc(self) -> Option<DateTime<Utc>> {
+        match self {
+            Self::Time(time) => {
+                let now = Utc::now();
+                let delta = TimeDelta::from_std(time.into()).ok()?;
+                Some(now + delta)
+            }
+
+            Self::Unix(ts) => match ts {
+                Time::Seconds(secs) => DateTime::from_timestamp(secs as i64, 0),
+                Time::Millis(millis) => DateTime::from_timestamp_millis(millis as i64),
+            },
+        }
+    }
+}
 
 #[derive(Debug, Eq, PartialEq, Clone)]
 pub enum Command {
@@ -19,7 +59,7 @@ pub enum Command {
     Set {
         key: String,
         value: String,
-        expiry: Option<Duration>,
+        expiry: Option<Expiry>,
     },
 
     /// Get the value of key.
@@ -74,27 +114,64 @@ impl FromStr for Command {
 
                     Ok(Self::Echo(msg.as_str().unwrap_or("").to_owned()))
                 } else if cmd.eq_ignore_ascii_case("set") {
-                    let key = values
-                        .next()
-                        .ok_or(CommandError::Set(SetError::MissingKey))?;
+                    let Some(key) = values.next() else {
+                        return Err(RedisError::Command(CommandError::Set(SetError::MissingKey)));
+                    };
 
-                    let key = key
-                        .as_str()
-                        .ok_or(CommandError::InvalidArgument(key.clone()))?;
+                    let Some(key) = key.as_str() else {
+                        return Err(RedisError::Command(CommandError::InvalidArgument(key)));
+                    };
 
-                    let value = values
-                        .next()
-                        .ok_or(CommandError::Set(SetError::MissingValue))?;
+                    let Some(value) = values.next() else {
+                        return Err(RedisError::Command(CommandError::Set(
+                            SetError::MissingValue,
+                        )));
+                    };
 
-                    let value = value
-                        .as_str()
-                        .ok_or(CommandError::InvalidArgument(value.clone()))?;
+                    let Some(value) = value.as_str() else {
+                        return Err(RedisError::Command(CommandError::InvalidArgument(value)));
+                    };
 
-                    // TODO(oktal): handle expiry and other set command options
+                    let expiry = if let Some(arg) = values.next() {
+                        let Some(expiry_key) = arg.as_str() else {
+                            return Err(RedisError::Command(CommandError::InvalidArgument(arg)));
+                        };
+
+                        let Some(expiry_value) = values.next() else {
+                            return Err(RedisError::Command(CommandError::Set(
+                                SetError::MissingExpiry,
+                            )));
+                        };
+
+                        let Some(expiry) = expiry_value.as_str() else {
+                            return Err(RedisError::Command(CommandError::InvalidArgument(
+                                expiry_value,
+                            )));
+                        };
+
+                        let expiry: u64 = expiry
+                            .parse()
+                            .map_err(|_| CommandError::InvalidArgument(expiry_value))?;
+
+                        if expiry_key.eq_ignore_ascii_case("ex") {
+                            Some(Expiry::Time(Time::Seconds(expiry)))
+                        } else if expiry_key.eq_ignore_ascii_case("px") {
+                            Some(Expiry::Time(Time::Millis(expiry)))
+                        } else if expiry_key.eq_ignore_ascii_case("exat") {
+                            Some(Expiry::Unix(Time::Seconds(expiry)))
+                        } else if expiry_key.eq_ignore_ascii_case("pxat") {
+                            Some(Expiry::Unix(Time::Millis(expiry)))
+                        } else {
+                            return Err(RedisError::Command(CommandError::InvalidArgument(arg)));
+                        }
+                    } else {
+                        None
+                    };
+
                     Ok(Self::Set {
                         key: key.to_owned(),
                         value: value.to_owned(),
-                        expiry: None,
+                        expiry,
                     })
                 } else if cmd.eq_ignore_ascii_case("get") {
                     let key = values

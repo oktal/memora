@@ -19,6 +19,9 @@ pub enum SetError {
 
     #[error("missing value for `SET` command")]
     MissingValue,
+
+    #[error("missing expiry timestamp for `SET` command")]
+    MissingExpiry,
 }
 
 #[derive(Debug, Error)]

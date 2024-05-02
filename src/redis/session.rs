@@ -68,13 +68,14 @@ impl Session {
                 break;
             }
 
-            debug!("received {:?}", &buf[..bytes]);
-
             let res = match std::str::from_utf8(&buf[..bytes]) {
-                Ok(resp) => match resp.parse::<Command>() {
-                    Ok(cmd) => self.handle_command(cmd).await,
-                    Err(e) => Err(e),
-                },
+                Ok(resp) => {
+                    debug!("received {resp}");
+                    match resp.parse::<Command>() {
+                        Ok(cmd) => self.handle_command(cmd).await,
+                        Err(e) => Err(e),
+                    }
+                }
                 Err(_) => Err(RedisError::Utf8Error),
             };
 

@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::io::Write;
 
 use logos::Logos;
@@ -28,13 +30,6 @@ impl Token {
     fn expect_int(&self) -> Result<i64> {
         match self {
             Self::Int(v) => Ok(*v),
-            _ => Err(RedisError::Resp(RespError::InvalidToken)),
-        }
-    }
-
-    fn expect_str(&self) -> Result<&str> {
-        match self {
-            Self::Str(str) => Ok(str.as_str()),
             _ => Err(RedisError::Resp(RespError::InvalidToken)),
         }
     }
@@ -169,7 +164,12 @@ where
             .map_err(|_| RespError::InvalidLength(length))?;
 
         let token = self.next()?;
-        let str = token.expect_str()?;
+
+        let str = match token {
+            Token::Str(val) => val,
+            Token::Int(val) => val.to_string(),
+            _ => return Err(RedisError::Resp(RespError::InvalidToken)),
+        };
 
         if str.len() != length {
             return Err(RedisError::Resp(RespError::LengthMismatch {
