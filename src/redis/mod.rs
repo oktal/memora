@@ -100,10 +100,6 @@ impl Request {
         let (tx, rx) = oneshot::channel();
         (Self { cmd, tx }, rx)
     }
-
-    fn send(self, resp: impl Into<Response>) {
-        let _ = self.tx.send(resp.into());
-    }
 }
 
 struct Response(Value);
