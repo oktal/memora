@@ -48,7 +48,8 @@ pub enum StringValue {
     Simple(String),
 
     /// A bulk string represents a single binary string. The string can be of any size, but by default, Redis limits it to 512 MB
-    Bulk(String),
+    /// A value of [`None`] represents a null bulk string
+    Bulk(Option<String>),
 
     /// A null string
     Null,
@@ -61,17 +62,18 @@ impl StringValue {
                 write!(buf, "+{str}")
             }
 
-            Self::Bulk(str) => {
+            Self::Bulk(Some(str)) => {
                 let len = str.len();
                 write!(buf, "${len}\r\n{str}")
             }
-            Self::Null => write!(buf, "$-1"),
+            Self::Null | Self::Bulk(None) => write!(buf, "$-1"),
         }?)
     }
 
     pub fn as_str(&self) -> Option<&str> {
         match self {
-            Self::Simple(str) | Self::Bulk(str) => Some(str.as_str()),
+            Self::Simple(str) => Some(str.as_str()),
+            Self::Bulk(str) => str.as_ref().map(|s| s.as_str()),
             _ => None,
         }
     }
@@ -92,18 +94,34 @@ pub enum Value {
 }
 
 impl Value {
+    /// Create a new [`Value`] representing a non-null bulk string
+    pub fn bulk(s: impl Into<String>) -> Self {
+        Self::Str(StringValue::Bulk(Some(s.into())))
+    }
+
+    /// Create a new [`Value`] representing a null bulk string
+    pub fn null_bulk() -> Self {
+        Self::Str(StringValue::Bulk(None))
+    }
+
+    /// Creata a new [`Value`] representing an array of values
+    pub fn from_iter<I, V>(it: I) -> Self
+    where
+        I: IntoIterator<Item = V>,
+        V: Into<Self>,
+    {
+        Self::Array(it.into_iter().map(Into::into).collect())
+    }
+
     pub fn encode(&self, buf: &mut impl Write) -> Result<()> {
         match self {
             Self::Array(values) => {
                 let len = values.len();
-                write!(buf, "*{len}")?;
+                write!(buf, "*{len}\r\n")?;
 
                 for value in values {
-                    write!(buf, "\r\n")?;
-
                     value.encode(buf)?;
                 }
-                write!(buf, "\r\n")?;
 
                 Ok(())
             }
@@ -113,7 +131,7 @@ impl Value {
                 write!(buf, "\r\n")
             }
 
-            Self::Int(i) => Ok(write!(buf, "{i}")?),
+            Self::Int(i) => Ok(write!(buf, "{i}\r\n")?),
         }?;
 
         Ok(())
@@ -139,8 +157,12 @@ where
         Self { lexer }
     }
 
-    fn parse_bulk(&mut self) -> Result<String> {
+    fn parse_bulk(&mut self) -> Result<Option<String>> {
         let length = self.next()?.expect_int()?;
+
+        if length == -1 {
+            return Ok(None);
+        }
 
         let length: usize = length
             .try_into()
@@ -156,7 +178,7 @@ where
             }));
         }
 
-        Ok(str.to_owned())
+        Ok(Some(str.to_owned()))
     }
 
     fn parse_array(&mut self) -> Result<Vec<Value>> {
@@ -253,19 +275,13 @@ mod tests {
         let value = parser.parse().expect("parse value").expect("parse value");
         assert_eq!(
             value,
-            Value::Array(vec![
-                Value::Str(StringValue::Bulk("echo".to_owned())),
-                Value::Str(StringValue::Bulk("hey".to_owned())),
-            ])
+            Value::from_iter([Value::bulk("echo"), Value::bulk("hey")])
         );
     }
 
     #[test]
     fn should_encode_value() {
-        let value = Value::Array(vec![
-            Value::Str(StringValue::Bulk("echo".to_owned())),
-            Value::Str(StringValue::Bulk("hey".to_owned())),
-        ]);
+        let value = Value::from_iter([Value::bulk("echo"), Value::bulk("hey")]);
 
         let mut buf = Cursor::new(Vec::new());
         let mut str = String::new();

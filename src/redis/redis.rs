@@ -79,9 +79,9 @@ impl Redis {
                 Ok(Value::Str(StringValue::Simple("OK".to_owned())).into())
             }
             Command::Get { key } => Ok(if let Some(value) = self.kvs.get(&key) {
-                Value::Str(StringValue::Bulk(value.clone()))
+                Value::bulk(value.clone())
             } else {
-                Value::Str(StringValue::Null)
+                Value::null_bulk()
             }
             .into()),
             _ => todo!(),

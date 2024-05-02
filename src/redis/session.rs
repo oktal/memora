@@ -92,17 +92,13 @@ impl Session {
         let resp = match cmd {
             Command::Ping(msg) => {
                 if let Some(msg) = msg {
-                    Value::Array(vec![
-                        Value::Str(StringValue::Bulk("PONG".to_owned())),
-                        Value::Str(StringValue::Bulk(msg)),
-                    ])
-                    .into()
+                    Value::from_iter([Value::bulk("PONG"), Value::bulk(msg)]).into()
                 } else {
                     Value::Str(StringValue::Simple("PONG".to_owned())).into()
                 }
             }
 
-            Command::Echo(msg) => Value::Str(StringValue::Bulk(msg)).into(),
+            Command::Echo(msg) => Value::bulk(msg).into(),
 
             cmd => {
                 let (req, rx) = Request::new(cmd);
