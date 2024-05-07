@@ -10,7 +10,10 @@ mod session;
 pub use redis::Redis;
 use tokio::sync::oneshot;
 
-use self::{cmd::Command, resp::Value};
+use self::{
+    cmd::Command,
+    resp::{StringValue, Value},
+};
 
 #[derive(Debug, Error)]
 pub enum SetError {
@@ -58,9 +61,6 @@ pub enum RespError {
 
     #[error("length mismatch. expected {expected} got {got}")]
     LengthMismatch { expected: usize, got: usize },
-
-    #[error("unexpected end of file")]
-    UnexpectedEof,
 }
 
 #[derive(Debug, Error)]
@@ -102,11 +102,15 @@ impl Request {
     }
 }
 
-struct Response(Value);
+pub struct Response(Value);
 
 impl Response {
     fn encode(&self, buf: &mut impl Write) -> Result<()> {
         self.0.encode(buf)
+    }
+
+    pub fn ok() -> Self {
+        Value::Str(StringValue::Simple("OK".to_owned())).into()
     }
 }
 

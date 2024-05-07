@@ -1,10 +1,10 @@
-use std::io::{self};
-
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    sync::mpsc,
-};
-use tracing::{debug, error, info};
+use bytes::{Buf, BufMut, BytesMut};
+use futures::SinkExt;
+use logos::Logos;
+use tokio::sync::mpsc;
+use tokio_stream::StreamExt;
+use tokio_util::codec::{Decoder, Encoder, Framed};
+use tracing::{error, info};
 
 use crate::redis::{
     cmd::Command,
@@ -12,71 +12,76 @@ use crate::redis::{
     RedisError,
 };
 
-use super::{Request, Result};
+use super::{resp, Request, Response, Result};
 
-struct Buffer<W> {
-    inner: W,
-    count: usize,
-}
+struct RespFramer;
 
-impl<W> Buffer<W>
-where
-    W: io::Write,
-{
-    fn new(inner: W) -> Self {
-        Self { inner, count: 0 }
+impl Decoder for RespFramer {
+    type Item = resp::Value;
+    type Error = RedisError;
+
+    fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<Self::Item>> {
+        let src = std::str::from_utf8(&buf).map_err(|_| RedisError::Utf8Error)?;
+        let len = src.len();
+
+        match resp::Value::parse(resp::Token::lexer(src)) {
+            Ok(Some((value, remainder))) => {
+                let parsed_len = len - remainder.len();
+                buf.advance(parsed_len);
+                Ok(Some(value))
+            }
+            Ok(None) => Ok(None),
+            Err(e) => Err(e),
+        }
     }
 }
 
-impl<W> io::Write for Buffer<W>
-where
-    W: io::Write,
-{
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let len = self.inner.write(buf)?;
-        self.count += len;
-        Ok(len)
-    }
+impl Encoder<resp::Value> for RespFramer {
+    type Error = RedisError;
 
-    fn flush(&mut self) -> io::Result<()> {
-        self.inner.flush()
+    fn encode(&mut self, item: resp::Value, dst: &mut BytesMut) -> Result<()> {
+        let mut writer = dst.writer();
+        item.encode(&mut writer)
+    }
+}
+
+impl Encoder<Response> for RespFramer {
+    type Error = RedisError;
+
+    fn encode(
+        &mut self,
+        item: Response,
+        dst: &mut BytesMut,
+    ) -> std::prelude::v1::Result<(), Self::Error> {
+        let mut writer = dst.writer();
+        item.encode(&mut writer)
     }
 }
 
 pub(super) struct Session {
-    conn: tokio::net::TcpStream,
-    buf: Vec<u8>,
+    conn: Framed<tokio::net::TcpStream, RespFramer>,
     reqs_tx: mpsc::Sender<Request>,
 }
 
 impl Session {
     pub(super) fn new(conn: tokio::net::TcpStream, reqs_tx: mpsc::Sender<Request>) -> Self {
         Self {
-            conn,
-            buf: Vec::with_capacity(1024),
+            conn: RespFramer.framed(conn),
             reqs_tx,
         }
     }
 
     pub(super) async fn run(mut self) -> Result<()> {
-        let mut buf = [0u8; 512];
-
         loop {
-            let bytes = self.conn.read(&mut buf).await?;
-
-            if bytes == 0 {
+            let Some(Ok(value)) = self.conn.next().await else {
                 break;
-            }
+            };
 
-            let res = match std::str::from_utf8(&buf[..bytes]) {
-                Ok(resp) => {
-                    debug!("received {resp}");
-                    match resp.parse::<Command>() {
-                        Ok(cmd) => self.handle_command(cmd).await,
-                        Err(e) => Err(e),
-                    }
-                }
-                Err(_) => Err(RedisError::Utf8Error),
+            let command = Command::try_from(value);
+
+            let res = match command {
+                Ok(cmd) => self.handle_command(cmd).await,
+                Err(e) => Err(e),
             };
 
             if let Err(e) = res {
@@ -111,16 +116,7 @@ impl Session {
             }
         };
 
-        self.buf.clear();
-        let mut buf = Buffer::new(&mut self.buf);
-        resp.encode(&mut buf)?;
-
-        let count = buf.count;
-        let buf = &buf.inner[..count];
-
-        debug!("sending {:?}", buf);
-
-        self.conn.write(buf).await?;
+        self.conn.send(resp).await?;
         Ok(())
     }
 }

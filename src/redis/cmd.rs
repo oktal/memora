@@ -1,12 +1,8 @@
-use std::{str::FromStr, time::Duration};
+use std::time::Duration;
 
 use chrono::{DateTime, TimeDelta, Utc};
-use logos::Logos;
 
-use super::{
-    resp::{Parser, Token, Value},
-    CommandError, GetError, RedisError, Result, SetError,
-};
+use super::{resp::Value, CommandError, GetError, RedisError, Result, SetError};
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum Time {
@@ -71,16 +67,10 @@ pub enum Command {
     },
 }
 
-impl FromStr for Command {
-    type Err = RedisError;
+impl TryFrom<Value> for Command {
+    type Error = RedisError;
 
-    fn from_str(s: &str) -> Result<Self> {
-        let lexer = Token::lexer(s);
-        let mut parser = Parser::new(lexer);
-
-        let value = parser.next().ok_or(RedisError::InvalidCommand)?;
-        let value = value?;
-
+    fn try_from(value: Value) -> Result<Self> {
         match value {
             Value::Array(values) => {
                 let mut values = values.into_iter();
@@ -191,19 +181,5 @@ impl FromStr for Command {
             }
             _ => Err(RedisError::InvalidCommand),
         }
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    #[test]
-    fn should_parse_echo() {
-        let cmd = "*2\r\n$4\r\necho\r\n$3\r\nhey\r\n"
-            .parse::<Command>()
-            .expect("parse echo");
-
-        assert_eq!(cmd, Command::Echo("hey".to_owned()));
     }
 }

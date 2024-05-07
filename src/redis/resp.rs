@@ -2,7 +2,7 @@
 
 use std::io::Write;
 
-use logos::Logos;
+use logos::{Lexer, Logos};
 
 use super::{RedisError, RespError, Result};
 
@@ -26,8 +26,20 @@ pub enum Token {
     Str(String),
 }
 
+impl TryInto<String> for Token {
+    type Error = RedisError;
+
+    fn try_into(self) -> Result<String> {
+        Ok(match self {
+            Self::Int(v) => v.to_string(),
+            Self::Str(s) => s,
+            _ => return Err(RedisError::Resp(RespError::InvalidToken)),
+        })
+    }
+}
+
 impl Token {
-    fn expect_int(&self) -> Result<i64> {
+    fn as_int(&self) -> Result<i64> {
         match self {
             Self::Int(v) => Ok(*v),
             _ => Err(RedisError::Resp(RespError::InvalidToken)),
@@ -138,104 +150,126 @@ impl Value {
             _ => None,
         }
     }
+
+    /// Parse a [`Self`] from a stream of [`Token`]
+    pub fn parse<'a>(lexer: Lexer<'a, Token>) -> Result<Option<(Self, &'a str)>> {
+        Parser::new(lexer).parse()
+    }
 }
 
-pub(super) struct Parser<L> {
-    lexer: L,
+struct Parser<'a> {
+    lexer: Lexer<'a, Token>,
 }
 
-impl<L> Parser<L>
-where
-    L: Iterator<Item = std::result::Result<Token, ()>>,
-{
-    pub(super) fn new(lexer: L) -> Self {
+impl<'a> Parser<'a> {
+    fn new(lexer: Lexer<'a, Token>) -> Self {
         Self { lexer }
     }
 
-    fn parse_bulk(&mut self) -> Result<Option<String>> {
-        let length = self.next()?.expect_int()?;
+    /// Parse a RESP bulk string
+    /// On success, the outer `Option` indicates whether a string has been parsed
+    /// or not. The inner `Option` indicates whether the bulk string is a null string
+    fn parse_bulk(&mut self) -> Result<Option<Option<String>>> {
+        // Read length
+        let Some(length) = self.try_next()? else {
+            return Ok(None);
+        };
 
+        let Ok(length) = length.as_int() else {
+            return Err(RedisError::Resp(RespError::InvalidToken));
+        };
+
+        // Null bulk string
         if length == -1 {
+            return Ok(Some(None));
+        }
+
+        // This is not a bulk string, attempt to convert the length to a `usize`
+        // and error otherwise
+        let Ok(length) = length.try_into() else {
+            return Err(RedisError::Resp(RespError::InvalidLength(length)));
+        };
+
+        // Read the string
+        let Some(token) = self.try_next()? else {
+            return Ok(None);
+        };
+
+        let str: String = token.try_into()?;
+
+        // The length of the string we read does not match the expected length,
+        // which means that we read a partial string
+        if str.len() != length {
             return Ok(None);
         }
 
-        let length: usize = length
-            .try_into()
-            .map_err(|_| RespError::InvalidLength(length))?;
+        Ok(Some(Some(str.to_owned())))
+    }
 
-        let token = self.next()?;
-
-        let str = match token {
-            Token::Str(val) => val,
-            Token::Int(val) => val.to_string(),
-            _ => return Err(RedisError::Resp(RespError::InvalidToken)),
+    /// Attempt to parse a RESP array
+    /// On success, return `Some` if a complete array has been parsed or `None`
+    /// if a partial array has been parsed
+    fn parse_array(&mut self) -> Result<Option<Vec<Value>>> {
+        // Read length
+        let Some(length) = self.try_next()? else {
+            return Ok(None);
         };
 
-        if str.len() != length {
-            return Err(RedisError::Resp(RespError::LengthMismatch {
-                expected: length,
-                got: str.len(),
-            }));
+        let Ok(length) = length.as_int() else {
+            return Err(RedisError::Resp(RespError::InvalidToken));
+        };
+
+        let Ok(length) = length.try_into() else {
+            return Err(RedisError::Resp(RespError::InvalidLength(length)));
+        };
+
+        let values = (0usize..length).map(|_| self.parse_one());
+        values.collect()
+    }
+
+    fn parse(&mut self) -> Result<Option<(Value, &'a str)>> {
+        match self.parse_one() {
+            Ok(Some(value)) => Ok(Some((value, self.lexer.remainder()))),
+            Ok(None) => Ok(None),
+            Err(e) => Err(e),
         }
-
-        Ok(Some(str.to_owned()))
     }
 
-    fn parse_array(&mut self) -> Result<Vec<Value>> {
-        let length = self.next()?.expect_int()?;
+    /// Attempt to parse a RESP value
+    /// On success, return `Some` if a complete value has been parsed or `None` if a partial
+    /// value was parsed
+    fn parse_one(&mut self) -> Result<Option<Value>> {
+        let Some(token) = self.try_next()? else {
+            return Ok(None);
+        };
 
-        let length: usize = length
-            .try_into()
-            .map_err(|_| RespError::InvalidLength(length))?;
-
-        Ok((0..length)
-            .map(|_| self.parse().ok_or(RespError::UnexpectedEof)?)
-            .collect::<Result<Vec<_>>>()?)
-    }
-
-    fn parse(&mut self) -> Option<Result<Value>> {
-        let token = self.try_next()?;
         match token {
-            Ok(tok) => match tok {
-                Token::Star => {
-                    let values = self.parse_array();
-                    match values {
-                        Ok(values) => Some(Ok(Value::Array(values))),
-                        Err(e) => Some(Err(e)),
-                    }
-                }
-                Token::Dollar => {
-                    let bulk = self.parse_bulk();
-                    match bulk {
-                        Ok(str) => Some(Ok(Value::Str(StringValue::Bulk(str)))),
-                        Err(e) => Some(Err(e)),
-                    }
-                }
-                _ => todo!(),
-            },
-            Err(e) => Some(Err(e)),
+            Token::Star => {
+                let Some(values) = self.parse_array()? else {
+                    return Ok(None);
+                };
+                Ok(Some(Value::Array(values)))
+            }
+            Token::Dollar => {
+                let Some(bulk) = self.parse_bulk()? else {
+                    return Ok(None);
+                };
+                Ok(Some(Value::Str(StringValue::Bulk(bulk))))
+            }
+            _ => todo!(),
         }
     }
 
-    fn next(&mut self) -> Result<Token> {
-        let tok = self.lexer.next().ok_or(RespError::UnexpectedEof)?;
-        Ok(tok.map_err(|_| RespError::InvalidToken)?)
-    }
+    /// Attempt to consume the next [`Token`]
+    /// On success, return `Some` if a token is available or `None` otherwise
+    fn try_next(&mut self) -> Result<Option<Token>> {
+        let Some(token) = self.lexer.next() else {
+            return Ok(None);
+        };
 
-    fn try_next(&mut self) -> Option<Result<Token>> {
-        let tok = self.lexer.next()?;
-        Some(tok.map_err(|_| RedisError::Resp(RespError::InvalidToken)))
-    }
-}
-
-impl<L> Iterator for Parser<L>
-where
-    L: Iterator<Item = std::result::Result<Token, ()>>,
-{
-    type Item = Result<Value>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.parse()
+        token
+            .map(Some)
+            .map_err(|_| RedisError::Resp(RespError::InvalidToken))
     }
 }
 
@@ -272,7 +306,10 @@ mod tests {
         let lex = Token::lexer("*2\r\n$4\r\necho\r\n$3\r\nhey\r\n");
         let mut parser = Parser::new(lex);
 
-        let value = parser.parse().expect("parse value").expect("parse value");
+        let value = parser
+            .parse_one()
+            .expect("parse value")
+            .expect("parse value");
         assert_eq!(
             value,
             Value::from_iter([Value::bulk("echo"), Value::bulk("hey")])
