@@ -11,7 +11,10 @@ use super::{
     CommandError, InfoError, RedisError, Request, Response, Result,
 };
 use chrono::Utc;
-use itertools::Itertools;
+use futures::{
+    future::{self, BoxFuture},
+    Future,
+};
 use tokio::{net::ToSocketAddrs, sync::mpsc};
 use tracing::{debug, error, info};
 
@@ -64,15 +67,74 @@ impl StringStore {
     }
 }
 
-pub struct Redis {
+pub trait Role {
+    type StartFuture: Future<Output = Result<()>>;
+
+    fn info(&self) -> Vec<String>;
+    fn start(&mut self) -> Self::StartFuture;
+}
+
+pub struct Master;
+pub struct Replica {
+    addr: (String, u16),
+}
+
+impl Replica {
+    pub fn of(host: impl Into<String>, port: impl Into<u16>) -> Self {
+        Self {
+            addr: (host.into(), port.into()),
+        }
+    }
+}
+
+impl Role for Master {
+    type StartFuture = future::Ready<Result<()>>;
+
+    fn info(&self) -> Vec<String> {
+        let fields = [("role", "master")];
+        fields
+            .into_iter()
+            .map(|(key, value)| format!("{key}:{value}"))
+            .collect()
+    }
+
+    fn start(&mut self) -> Self::StartFuture {
+        future::ready(Ok(()))
+    }
+}
+
+impl Role for Replica {
+    type StartFuture = BoxFuture<'static, Result<()>>;
+
+    fn info(&self) -> Vec<String> {
+        let fields = [("role", "slave")];
+        fields
+            .into_iter()
+            .map(|(key, value)| format!("{key}:{value}"))
+            .collect()
+    }
+
+    fn start(&mut self) -> Self::StartFuture {
+        info!("connecting to {}:{} ...", self.addr.0, self.addr.1);
+
+        Box::pin(async move { Ok(()) })
+    }
+}
+
+pub struct Redis<R> {
     listener: tokio::net::TcpListener,
     sessions: Vec<tokio::task::JoinHandle<Result<()>>>,
+
+    role: R,
 
     string: StringStore,
 }
 
-impl Redis {
-    pub async fn new(addr: impl ToSocketAddrs) -> Result<Self> {
+impl<R> Redis<R>
+where
+    R: Role,
+{
+    pub async fn new(addr: impl ToSocketAddrs, role: R) -> Result<Self> {
         let listener = tokio::net::TcpListener::bind(addr).await?;
 
         let addr = listener.local_addr()?;
@@ -82,10 +144,13 @@ impl Redis {
             listener,
             sessions: Vec::new(),
             string: StringStore::default(),
+            role,
         })
     }
 
     pub async fn start(mut self) -> Result<()> {
+        self.role.start().await?;
+
         let (reqs_tx, mut reqs_rx) = mpsc::channel(128);
 
         loop {
@@ -126,13 +191,7 @@ impl Redis {
             Command::Info { section } => {
                 let section = section.as_deref().unwrap_or("default");
                 if section.eq_ignore_ascii_case("replication") {
-                    let fields = [("role", "master")];
-
-                    let fields = fields
-                        .into_iter()
-                        .map(|(key, value)| format!("{key}:{value}"))
-                        .join("\r\n");
-
+                    let fields = self.role.info().join("\r\n");
                     Ok(Value::bulk(fields).into())
                 } else {
                     Err(RedisError::Command(CommandError::Info(

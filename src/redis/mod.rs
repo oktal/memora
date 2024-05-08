@@ -7,7 +7,7 @@ pub mod redis;
 pub mod resp;
 mod session;
 
-pub use redis::Redis;
+pub use redis::{Redis, Role};
 use tokio::sync::oneshot;
 
 use self::{
