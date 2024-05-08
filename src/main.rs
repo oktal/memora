@@ -35,7 +35,7 @@ async fn main() -> anyhow::Result<()> {
     if let Some((host, port)) = opts.replica_of()? {
         run(addr, Replica::of(host, port)).await
     } else {
-        run(addr, Master).await
+        run(addr, Master::new()).await
     }?;
 
     Ok(())
