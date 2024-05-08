@@ -34,12 +34,21 @@ pub enum GetError {
 }
 
 #[derive(Debug, Error)]
+pub enum InfoError {
+    #[error("unknown section {0} for `INFO` command")]
+    UnknownSection(String),
+}
+
+#[derive(Debug, Error)]
 pub enum CommandError {
     #[error(transparent)]
     Set(#[from] SetError),
 
     #[error(transparent)]
     Get(#[from] GetError),
+
+    #[error(transparent)]
+    Info(#[from] InfoError),
 
     #[error("invalid argument for command: {0:?}")]
     InvalidArgument(Value),

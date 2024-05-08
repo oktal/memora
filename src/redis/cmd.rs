@@ -65,6 +65,13 @@ pub enum Command {
     Get {
         key: String,
     },
+
+    /// The INFO command returns information and statistics about the server in a format that is simple to parse by
+    /// computers and easy to read by humans.
+    Info {
+        /// The optional parameter can be used to select a specific section of information
+        section: Option<String>,
+    },
 }
 
 impl TryFrom<Value> for Command {
@@ -175,6 +182,18 @@ impl TryFrom<Value> for Command {
                     Ok(Self::Get {
                         key: key.to_owned(),
                     })
+                } else if cmd.eq_ignore_ascii_case("info") {
+                    let section = match values.next() {
+                        Some(section) => Some(
+                            section
+                                .as_str()
+                                .map(|s| s.to_owned())
+                                .ok_or(CommandError::InvalidArgument(section))?,
+                        ),
+                        None => None,
+                    };
+
+                    Ok(Self::Info { section })
                 } else {
                     Err(RedisError::UnknownCommand(cmd.to_owned()))
                 }

@@ -8,9 +8,10 @@ use crate::redis::session::Session;
 use super::{
     cmd::Command,
     resp::{StringValue, Value},
-    Request, Response, Result,
+    CommandError, InfoError, RedisError, Request, Response, Result,
 };
 use chrono::Utc;
+use itertools::Itertools;
 use tokio::{net::ToSocketAddrs, sync::mpsc};
 use tracing::{debug, error, info};
 
@@ -122,6 +123,23 @@ impl Redis {
 
     async fn handle_command(&mut self, cmd: Command) -> Result<Response> {
         match cmd {
+            Command::Info { section } => {
+                let section = section.as_deref().unwrap_or("default");
+                if section.eq_ignore_ascii_case("replication") {
+                    let fields = [("role", "master")];
+
+                    let fields = fields
+                        .into_iter()
+                        .map(|(key, value)| format!("{key}:{value}"))
+                        .join("\r\n");
+
+                    Ok(Value::bulk(fields).into())
+                } else {
+                    Err(RedisError::Command(CommandError::Info(
+                        InfoError::UnknownSection(section.to_owned()),
+                    )))
+                }
+            }
             Command::Set { key, value, expiry } => {
                 let expiry = match expiry {
                     // TODO(oktal): properly handle error
