@@ -51,8 +51,10 @@ impl StringStore {
         time: impl FnOnce() -> chrono::DateTime<Utc>,
     ) -> Option<&str> {
         let entry = self.0.get(key.as_ref())?;
+
         let expired = entry.expiry.map(|exp| exp <= time()).unwrap_or(false);
 
+        // TODO(oktal): properly reclaim expired entry from memory
         if expired {
             None
         } else {
@@ -71,6 +73,9 @@ pub struct Redis {
 impl Redis {
     pub async fn new(addr: impl ToSocketAddrs) -> Result<Self> {
         let listener = tokio::net::TcpListener::bind(addr).await?;
+
+        let addr = listener.local_addr()?;
+        info!("listening on {addr}");
 
         Ok(Self {
             listener,

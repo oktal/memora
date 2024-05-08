@@ -58,9 +58,6 @@ pub enum RespError {
 
     #[error("invalid length {0}")]
     InvalidLength(i64),
-
-    #[error("length mismatch. expected {expected} got {got}")]
-    LengthMismatch { expected: usize, got: usize },
 }
 
 #[derive(Debug, Error)]

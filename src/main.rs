@@ -1,11 +1,13 @@
+use clap::Parser;
 use redis::Redis;
-use tracing::info;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
+use crate::opts::Opts;
+
+mod opts;
 mod redis;
 
 const DEFAULT_HOSTNAME: &str = "127.0.0.1";
-const DEFAULT_PORT: u16 = 6379;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -14,9 +16,9 @@ async fn main() -> anyhow::Result<()> {
         .with(EnvFilter::from_env("REDIS_LOG"))
         .init();
 
-    info!("binding to {DEFAULT_HOSTNAME}:{DEFAULT_PORT}");
+    let opts = Opts::parse();
 
-    let redis = Redis::new((DEFAULT_HOSTNAME, DEFAULT_PORT)).await?;
+    let redis = Redis::new((DEFAULT_HOSTNAME, opts.port)).await?;
     redis.start().await?;
 
     Ok(())
