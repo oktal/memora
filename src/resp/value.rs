@@ -113,7 +113,7 @@ impl Value {
     }
 
     /// Parse a [`Self`] from a stream of [`Token`]
-    pub fn parse<'a>(lexer: Lexer<'a, Token>) -> RespResult<Option<(Self, &'a str)>> {
+    pub fn parse<'a>(lexer: Lexer<'a, Token>) -> RespResult<Option<(Self, &'a [u8])>> {
         Parser::new(lexer).parse()
     }
 }

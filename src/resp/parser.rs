@@ -76,7 +76,7 @@ impl<'a> Parser<'a> {
         values.collect()
     }
 
-    pub fn parse(&mut self) -> RespResult<Option<(Value, &'a str)>> {
+    pub fn parse(&mut self) -> RespResult<Option<(Value, &'a [u8])>> {
         match self.parse_one() {
             Ok(Some(value)) => Ok(Some((value, self.lexer.remainder()))),
             Ok(None) => Ok(None),
@@ -150,7 +150,7 @@ mod tests {
             Token::Str("hey".to_string()),
         ];
 
-        let lex = Token::lexer("*2\r\n$4\r\necho\r\n$3\r\nhey\r\n");
+        let lex = Token::lexer(b"*2\r\n$4\r\necho\r\n$3\r\nhey\r\n");
 
         for (expected, tok) in expected.into_iter().zip(lex) {
             let tok = tok.expect(&format!("expected token {:?}", expected));
@@ -160,7 +160,7 @@ mod tests {
 
     #[test]
     fn should_parse() {
-        let lex = Token::lexer("*2\r\n$4\r\necho\r\n$3\r\nhey\r\n");
+        let lex = Token::lexer(b"*2\r\n$4\r\necho\r\n$3\r\nhey\r\n");
         let mut parser = Parser::new(lex);
 
         let value = parser
@@ -175,7 +175,7 @@ mod tests {
 
     #[test]
     fn parse_simple() {
-        let lex = Token::lexer("+OK\r\n");
+        let lex = Token::lexer(b"+OK\r\n");
         let mut parser = Parser::new(lex);
 
         let value = parser

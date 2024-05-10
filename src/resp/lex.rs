@@ -5,6 +5,7 @@ use super::{RespError, RespResult};
 /// Represents a token from the RESP protocol
 #[derive(Debug, Eq, PartialEq, Clone, Logos)]
 #[logos(skip r"[\r\n]+")]
+#[logos(source = [u8])]
 pub enum Token {
     #[token("*")]
     Star,
@@ -15,10 +16,10 @@ pub enum Token {
     #[token("+")]
     Plus,
 
-    #[regex(r"-?(?:0|[1-9]\d*)", |lex| lex.slice().parse::<i64>().expect("failed to parse integer"))]
+    #[regex(r"-?(?:0|[1-9]\d*)", |lex| std::str::from_utf8(lex.slice()).expect("invalid utf-8").parse::<i64>().expect("failed to parse integer"))]
     Int(i64),
 
-    #[regex(r"[a-zA-Z]+", |lex| lex.slice().to_owned())]
+    #[regex(r"[a-zA-Z]+", |lex| std::str::from_utf8(lex.slice()).expect("invalid utf-8").to_owned())]
     Str(String),
 }
 

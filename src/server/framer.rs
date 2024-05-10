@@ -13,10 +13,9 @@ impl Decoder for RespFramer {
     type Error = RespError;
 
     fn decode(&mut self, buf: &mut BytesMut) -> RespResult<Option<Self::Item>> {
-        let src = std::str::from_utf8(&buf).map_err(|_| RespError::Utf8Error)?;
-        let len = src.len();
+        let len = buf.len();
 
-        match resp::Value::parse(resp::Token::lexer(src)) {
+        match resp::Value::parse(resp::Token::lexer(&buf)) {
             Ok(Some((value, remainder))) => {
                 let parsed_len = len - remainder.len();
                 buf.advance(parsed_len);
