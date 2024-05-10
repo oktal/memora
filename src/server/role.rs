@@ -147,6 +147,8 @@ async fn handshake(
     // Frame the connection
     let mut conn = RespFramer.framed(conn);
 
+    info!("handshasking with master node...");
+
     // Step 1. Send a PING to the master and wait for an answer
     debug!("sending `PING` to master node...");
     let ping = resp::Value::from_iter([resp::Value::bulk("PING")]);
@@ -157,23 +159,35 @@ async fn handshake(
     // TODO(oktal): check that the response is a valid response from a PING
 
     // Step 2. Send the first REPLCONF message to configure the port the replica is listening to
+    debug!("configuring listening-port with the master node...");
     replconf(
         &mut conn,
-        [
-            resp::Value::bulk("listening-port"),
-            resp::Value::bulk(port.to_string()),
-        ],
+        [resp::Value::bulk("listening-port"), resp::Value::bulk(port)],
     )
     .await?;
 
-    // Step 3. Send the second REPLCONF to configure the capabilities of the replica
+    // Send the second REPLCONF to configure the capabilities of the replica
+    debug!("configuring replica capabilities with the master node...");
     replconf(
         &mut conn,
         [resp::Value::bulk("capa"), resp::Value::bulk("psync2")],
     )
     .await?;
 
+    // Step 3. Send the PSYNC command to initiate the replication stream with the master
+    debug!("initiate replication stream with the master node...");
+    let psync = resp::Value::from_iter([
+        resp::Value::bulk("PSYNC"),
+        resp::Value::bulk('?'),
+        resp::Value::bulk(-1),
+    ]);
+    conn.send(psync).await?;
+
+    let resp = conn.next().await.ok_or(HandshakeError::Closed)??;
+    debug!("received final handshake synchronization state {resp:?} from master");
+
     // Handshake is done
+    info!("... done handshaking");
     Ok(conn)
 }
 

@@ -58,8 +58,8 @@ pub enum Value {
 
 impl Value {
     /// Create a new [`Value`] representing a non-null bulk string
-    pub fn bulk(s: impl Into<String>) -> Self {
-        Self::Str(StringValue::Bulk(Some(s.into())))
+    pub fn bulk(s: impl ToString) -> Self {
+        Self::Str(StringValue::Bulk(Some(s.to_string())))
     }
 
     /// Create a new [`Value`] representing a simple string
