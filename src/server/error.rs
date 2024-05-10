@@ -2,9 +2,11 @@ use std::io::{self};
 
 use thiserror::Error;
 
+use super::cmd::CommandError;
 use crate::resp::RespError;
 
-use super::cmd::CommandError;
+/// Type-alias for standard generic error type that is safe to shared across threads
+pub type StdError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 #[derive(Debug, Error)]
 pub enum EncodeError {
@@ -29,6 +31,9 @@ pub enum MemoraError {
 
     #[error(transparent)]
     Command(#[from] CommandError),
+
+    #[error(transparent)]
+    Standard(StdError),
 }
 
 pub type MemoraResult<T> = std::result::Result<T, MemoraError>;

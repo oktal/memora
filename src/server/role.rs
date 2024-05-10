@@ -1,10 +1,30 @@
-use std::{fmt, future};
+use std::{fmt, future, io};
 
-use futures::{future::BoxFuture, Future};
+use futures::{future::BoxFuture, Future, SinkExt};
 use rand::Rng;
-use tracing::info;
+use thiserror::Error;
+use tokio::net::ToSocketAddrs;
+use tokio_util::codec::{Decoder, Framed};
+use tracing::{debug, info};
 
-use super::MemoraResult;
+use crate::resp::{self};
+
+use super::{framer::RespFramer, MemoraError, MemoraResult};
+
+#[derive(Debug, Error)]
+pub enum HandshakeError {
+    #[error(transparent)]
+    Io(#[from] io::Error),
+
+    #[error(transparent)]
+    Resp(#[from] resp::RespError),
+}
+
+#[derive(Debug, Error)]
+pub enum ReplicaError {
+    #[error("error handshaking with master node: {0}")]
+    Handshare(#[from] HandshakeError),
+}
 
 pub trait Role {
     type StartFuture: Future<Output = MemoraResult<()>>;
@@ -84,6 +104,23 @@ impl Role for Master {
     }
 }
 
+async fn handshake(
+    master_addr: impl ToSocketAddrs,
+) -> Result<Framed<tokio::net::TcpStream, RespFramer>, HandshakeError> {
+    // Connect to the master
+    let conn = tokio::net::TcpStream::connect(master_addr).await?;
+
+    // Frame the connection
+    let mut conn = RespFramer.framed(conn);
+
+    // Step 1. Send a PING to the master and wait for an answer
+    debug!("sending `PING` to master node...");
+    let ping = resp::Value::from_iter([resp::Value::bulk("PING")]);
+    conn.send(ping).await?;
+
+    Ok(conn)
+}
+
 impl Role for Replica {
     type StartFuture = BoxFuture<'static, MemoraResult<()>>;
 
@@ -98,6 +135,14 @@ impl Role for Replica {
     fn start(&mut self) -> Self::StartFuture {
         info!("connecting to {}:{} ...", self.addr.0, self.addr.1);
 
-        Box::pin(async move { Ok(()) })
+        let addr = self.addr.clone();
+
+        Box::pin(async move {
+            // Initiate handshake
+            handshake(addr)
+                .await
+                .map_err(|e| MemoraError::Standard(Box::new(e)))?;
+            Ok(())
+        })
     }
 }

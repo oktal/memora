@@ -2,16 +2,20 @@
 
 mod cmd;
 pub mod error;
-use std::io::Write;
-
 pub use error::{MemoraError, MemoraResult};
+
+pub mod framer;
+
 pub mod role;
 pub use role::Role;
+
 pub mod server;
 pub use server::Memora;
 
 mod session;
 use session::Session;
+
+use std::io::Write;
 use tokio::sync::oneshot;
 
 use crate::resp;

@@ -26,4 +26,4 @@ pub enum RespError {
 }
 
 /// A type-alias for a RESP [`std::result::Result`]
-type RespResult<T> = std::result::Result<T, RespError>;
+pub type RespResult<T> = std::result::Result<T, RespError>;
