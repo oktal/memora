@@ -1,8 +1,56 @@
 use std::time::Duration;
 
 use chrono::{DateTime, TimeDelta, Utc};
+use thiserror::Error;
 
-use super::{resp::Value, CommandError, GetError, RedisError, Result, SetError};
+use crate::resp::{self, Value};
+
+#[derive(Debug, Error)]
+pub enum SetError {
+    #[error("missing key for `SET` command")]
+    MissingKey,
+
+    #[error("missing value for `SET` command")]
+    MissingValue,
+
+    #[error("missing expiry timestamp for `SET` command")]
+    MissingExpiry,
+}
+
+#[derive(Debug, Error)]
+pub enum GetError {
+    #[error("missing key for `GET` command")]
+    MissingKey,
+}
+
+#[derive(Debug, Error)]
+pub enum InfoError {
+    #[error("unknown section {0} for `INFO` command")]
+    UnknownSection(String),
+}
+
+#[derive(Debug, Error)]
+pub enum CommandError {
+    #[error(transparent)]
+    Set(#[from] SetError),
+
+    #[error(transparent)]
+    Get(#[from] GetError),
+
+    #[error(transparent)]
+    Info(#[from] InfoError),
+
+    #[error("invalid argument for command: {0:?}")]
+    InvalidArgument(resp::Value),
+
+    #[error("invalid command")]
+    InvalidCommand,
+
+    #[error("unknown command {0}")]
+    UnknownCommand(String),
+}
+
+pub type CommandResult<T> = std::result::Result<T, CommandError>;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum Time {
@@ -75,26 +123,24 @@ pub enum Command {
 }
 
 impl TryFrom<Value> for Command {
-    type Error = RedisError;
+    type Error = CommandError;
 
-    fn try_from(value: Value) -> Result<Self> {
+    fn try_from(value: Value) -> CommandResult<Self> {
         match value {
             Value::Array(values) => {
                 let mut values = values.into_iter();
-                let value = values.next().ok_or(RedisError::InvalidCommand)?;
+                let value = values.next().ok_or(CommandError::InvalidCommand)?;
                 let Value::Str(cmd) = value else {
-                    return Err(RedisError::InvalidCommand);
+                    return Err(CommandError::InvalidCommand);
                 };
 
-                let cmd = cmd.as_str().ok_or(RedisError::InvalidCommand)?;
+                let cmd = cmd.as_str().ok_or(CommandError::InvalidCommand)?;
 
                 if cmd.eq_ignore_ascii_case("ping") {
                     let msg = match values.next() {
                         Some(value) => {
                             let Value::Str(msg) = value else {
-                                return Err(RedisError::Command(CommandError::InvalidArgument(
-                                    value,
-                                )));
+                                return Err(CommandError::InvalidArgument(value));
                             };
 
                             Some(msg.as_str().unwrap_or("").to_owned())
@@ -104,46 +150,40 @@ impl TryFrom<Value> for Command {
 
                     Ok(Self::Ping(msg))
                 } else if cmd.eq_ignore_ascii_case("echo") {
-                    let msg = values.next().ok_or(RedisError::InvalidCommand)?;
+                    let msg = values.next().ok_or(CommandError::InvalidCommand)?;
                     let Value::Str(msg) = msg else {
-                        return Err(RedisError::Command(CommandError::InvalidArgument(msg)));
+                        return Err(CommandError::InvalidArgument(msg));
                     };
 
                     Ok(Self::Echo(msg.as_str().unwrap_or("").to_owned()))
                 } else if cmd.eq_ignore_ascii_case("set") {
                     let Some(key) = values.next() else {
-                        return Err(RedisError::Command(CommandError::Set(SetError::MissingKey)));
+                        return Err(CommandError::Set(SetError::MissingKey));
                     };
 
                     let Some(key) = key.as_str() else {
-                        return Err(RedisError::Command(CommandError::InvalidArgument(key)));
+                        return Err(CommandError::InvalidArgument(key));
                     };
 
                     let Some(value) = values.next() else {
-                        return Err(RedisError::Command(CommandError::Set(
-                            SetError::MissingValue,
-                        )));
+                        return Err(CommandError::Set(SetError::MissingValue));
                     };
 
                     let Some(value) = value.as_str() else {
-                        return Err(RedisError::Command(CommandError::InvalidArgument(value)));
+                        return Err(CommandError::InvalidArgument(value));
                     };
 
                     let expiry = if let Some(arg) = values.next() {
                         let Some(expiry_key) = arg.as_str() else {
-                            return Err(RedisError::Command(CommandError::InvalidArgument(arg)));
+                            return Err(CommandError::InvalidArgument(arg));
                         };
 
                         let Some(expiry_value) = values.next() else {
-                            return Err(RedisError::Command(CommandError::Set(
-                                SetError::MissingExpiry,
-                            )));
+                            return Err(CommandError::Set(SetError::MissingExpiry));
                         };
 
                         let Some(expiry) = expiry_value.as_str() else {
-                            return Err(RedisError::Command(CommandError::InvalidArgument(
-                                expiry_value,
-                            )));
+                            return Err(CommandError::InvalidArgument(expiry_value));
                         };
 
                         let expiry: u64 = expiry
@@ -159,7 +199,7 @@ impl TryFrom<Value> for Command {
                         } else if expiry_key.eq_ignore_ascii_case("pxat") {
                             Some(Expiry::Unix(Time::Millis(expiry)))
                         } else {
-                            return Err(RedisError::Command(CommandError::InvalidArgument(arg)));
+                            return Err(CommandError::InvalidArgument(arg));
                         }
                     } else {
                         None
@@ -195,10 +235,10 @@ impl TryFrom<Value> for Command {
 
                     Ok(Self::Info { section })
                 } else {
-                    Err(RedisError::UnknownCommand(cmd.to_owned()))
+                    Err(CommandError::UnknownCommand(cmd.to_owned()))
                 }
             }
-            _ => Err(RedisError::InvalidCommand),
+            _ => Err(CommandError::InvalidCommand),
         }
     }
 }

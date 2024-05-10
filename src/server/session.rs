@@ -6,22 +6,18 @@ use tokio_stream::StreamExt;
 use tokio_util::codec::{Decoder, Encoder, Framed};
 use tracing::{error, info};
 
-use crate::redis::{
-    cmd::Command,
-    resp::{StringValue, Value},
-    RedisError,
-};
+use crate::resp::{self, StringValue, Value};
 
-use super::{resp, Request, Response, Result};
+use super::{cmd::Command, MemoraError, MemoraResult, Request, Response};
 
 struct RespFramer;
 
 impl Decoder for RespFramer {
     type Item = resp::Value;
-    type Error = RedisError;
+    type Error = MemoraError;
 
-    fn decode(&mut self, buf: &mut BytesMut) -> Result<Option<Self::Item>> {
-        let src = std::str::from_utf8(&buf).map_err(|_| RedisError::Utf8Error)?;
+    fn decode(&mut self, buf: &mut BytesMut) -> MemoraResult<Option<Self::Item>> {
+        let src = std::str::from_utf8(&buf).map_err(|_| MemoraError::Utf8Error)?;
         let len = src.len();
 
         match resp::Value::parse(resp::Token::lexer(src)) {
@@ -31,22 +27,22 @@ impl Decoder for RespFramer {
                 Ok(Some(value))
             }
             Ok(None) => Ok(None),
-            Err(e) => Err(e),
+            Err(e) => Err(MemoraError::Resp(e)),
         }
     }
 }
 
 impl Encoder<resp::Value> for RespFramer {
-    type Error = RedisError;
+    type Error = MemoraError;
 
-    fn encode(&mut self, item: resp::Value, dst: &mut BytesMut) -> Result<()> {
+    fn encode(&mut self, item: resp::Value, dst: &mut BytesMut) -> MemoraResult<()> {
         let mut writer = dst.writer();
-        item.encode(&mut writer)
+        item.encode(&mut writer).map_err(MemoraError::Resp)
     }
 }
 
 impl Encoder<Response> for RespFramer {
-    type Error = RedisError;
+    type Error = MemoraError;
 
     fn encode(
         &mut self,
@@ -71,7 +67,7 @@ impl Session {
         }
     }
 
-    pub(super) async fn run(mut self) -> Result<()> {
+    pub(super) async fn run(mut self) -> MemoraResult<()> {
         loop {
             let Some(Ok(value)) = self.conn.next().await else {
                 break;
@@ -81,7 +77,7 @@ impl Session {
 
             let res = match command {
                 Ok(cmd) => self.handle_command(cmd).await,
-                Err(e) => Err(e),
+                Err(e) => Err(MemoraError::Command(e)),
             };
 
             if let Err(e) = res {
@@ -92,7 +88,7 @@ impl Session {
         Ok(())
     }
 
-    async fn handle_command(&mut self, cmd: Command) -> Result<()> {
+    async fn handle_command(&mut self, cmd: Command) -> MemoraResult<()> {
         info!("handling {cmd:?}");
 
         let resp = match cmd {

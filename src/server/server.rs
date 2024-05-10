@@ -1,24 +1,19 @@
 use std::{
     collections::{hash_map::Entry, HashMap},
-    fmt,
     net::SocketAddr,
 };
 
-use crate::redis::session::Session;
+use crate::resp::{StringValue, Value};
 
 use super::{
-    cmd::Command,
-    resp::{StringValue, Value},
-    CommandError, InfoError, RedisError, Request, Response, Result,
+    cmd::{Command, CommandError, InfoError},
+    MemoraError, MemoraResult, Request, Response, Role,
 };
 use chrono::Utc;
-use futures::{
-    future::{self, BoxFuture},
-    Future,
-};
-use rand::Rng;
 use tokio::{net::ToSocketAddrs, sync::mpsc};
 use tracing::{debug, error, info};
+
+use super::Session;
 
 #[derive(Debug)]
 struct StringEntry {
@@ -35,7 +30,7 @@ impl StringStore {
         key: String,
         value: String,
         expiry: Option<chrono::DateTime<Utc>>,
-    ) -> Result<()> {
+    ) -> MemoraResult<()> {
         debug!("storing key {key} with value {value} and expiry {expiry:?}");
 
         match self.0.entry(key) {
@@ -69,116 +64,20 @@ impl StringStore {
     }
 }
 
-pub trait Role {
-    type StartFuture: Future<Output = Result<()>>;
-
-    fn info(&self) -> Vec<String>;
-    fn start(&mut self) -> Self::StartFuture;
-}
-
-#[derive(Debug)]
-struct ReplicationId([u8; 40]);
-
-impl fmt::Display for ReplicationId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        // SAFETY: this is safe because we generated a ReplicationId from valid alphanumeric characters
-        let str = unsafe { std::str::from_utf8_unchecked(&self.0) };
-        f.write_str(str)
-    }
-}
-
-impl ReplicationId {
-    fn random() -> Self {
-        let chars = rand::thread_rng()
-            .sample_iter(&rand::distributions::Alphanumeric)
-            .take(40)
-            .collect::<Vec<_>>();
-
-        Self(chars.try_into().expect(
-            "taking 40 values from an iterator should be convertible to an array of 40 elements",
-        ))
-    }
-}
-
-pub struct Master {
-    id: ReplicationId,
-    offset: usize,
-}
-
-pub struct Replica {
-    addr: (String, u16),
-}
-
-impl Master {
-    pub fn new() -> Self {
-        Self {
-            id: ReplicationId::random(),
-            offset: 0,
-        }
-    }
-}
-
-impl Replica {
-    pub fn of(host: impl Into<String>, port: impl Into<u16>) -> Self {
-        Self {
-            addr: (host.into(), port.into()),
-        }
-    }
-}
-
-impl Role for Master {
-    type StartFuture = future::Ready<Result<()>>;
-
-    fn info(&self) -> Vec<String> {
-        let fields = [
-            ("role", "master".to_owned()),
-            ("master_replid", self.id.to_string()),
-            ("master_repl_offset", self.offset.to_string()),
-        ];
-
-        fields
-            .into_iter()
-            .map(|(key, value)| format!("{key}:{value}"))
-            .collect()
-    }
-
-    fn start(&mut self) -> Self::StartFuture {
-        future::ready(Ok(()))
-    }
-}
-
-impl Role for Replica {
-    type StartFuture = BoxFuture<'static, Result<()>>;
-
-    fn info(&self) -> Vec<String> {
-        let fields = [("role", "slave")];
-        fields
-            .into_iter()
-            .map(|(key, value)| format!("{key}:{value}"))
-            .collect()
-    }
-
-    fn start(&mut self) -> Self::StartFuture {
-        info!("connecting to {}:{} ...", self.addr.0, self.addr.1);
-
-        Box::pin(async move { Ok(()) })
-    }
-}
-
-pub struct Redis<R> {
+pub struct Memora<R> {
     listener: tokio::net::TcpListener,
-    sessions: Vec<tokio::task::JoinHandle<Result<()>>>,
+    sessions: Vec<tokio::task::JoinHandle<MemoraResult<()>>>,
 
     role: R,
 
     string: StringStore,
 }
 
-impl<R> Redis<R>
+impl<R> Memora<R>
 where
     R: Role,
 {
-    pub async fn new(addr: impl ToSocketAddrs, role: R) -> Result<Self> {
+    pub async fn new(addr: impl ToSocketAddrs, role: R) -> MemoraResult<Self> {
         let listener = tokio::net::TcpListener::bind(addr).await?;
 
         let addr = listener.local_addr()?;
@@ -192,7 +91,7 @@ where
         })
     }
 
-    pub async fn start(mut self) -> Result<()> {
+    pub async fn start(mut self) -> MemoraResult<()> {
         self.role.start().await?;
 
         let (reqs_tx, mut reqs_rx) = mpsc::channel(128);
@@ -230,7 +129,7 @@ where
         self.sessions.push(tokio::spawn(session.run()));
     }
 
-    async fn handle_command(&mut self, cmd: Command) -> Result<Response> {
+    async fn handle_command(&mut self, cmd: Command) -> MemoraResult<Response> {
         match cmd {
             Command::Info { section } => {
                 let section = section.as_deref().unwrap_or("default");
@@ -238,7 +137,7 @@ where
                     let fields = self.role.info().join("\r\n");
                     Ok(Value::bulk(fields).into())
                 } else {
-                    Err(RedisError::Command(CommandError::Info(
+                    Err(MemoraError::Command(CommandError::Info(
                         InfoError::UnknownSection(section.to_owned()),
                     )))
                 }

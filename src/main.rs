@@ -1,24 +1,22 @@
 use clap::Parser;
-use redis::{
-    redis::{Master, Replica},
-    Redis,
-};
+use server::Memora;
 use tokio::net::ToSocketAddrs;
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 use crate::opts::Opts;
 
 mod opts;
-mod redis;
+mod resp;
+mod server;
 
 const DEFAULT_HOSTNAME: &str = "127.0.0.1";
 
 async fn run<R>(addr: impl ToSocketAddrs, role: R) -> anyhow::Result<()>
 where
-    R: redis::Role,
+    R: server::Role,
 {
-    let redis = Redis::new(addr, role).await?;
-    redis.start().await?;
+    let memora = Memora::new(addr, role).await?;
+    memora.start().await?;
 
     Ok(())
 }
@@ -33,9 +31,9 @@ async fn main() -> anyhow::Result<()> {
     let opts = Opts::parse();
     let addr = (DEFAULT_HOSTNAME, opts.port);
     if let Some((host, port)) = opts.replica_of()? {
-        run(addr, Replica::of(host, port)).await
+        run(addr, server::role::Replica::of(host, port)).await
     } else {
-        run(addr, Master::new()).await
+        run(addr, server::role::Master::new()).await
     }?;
 
     Ok(())
