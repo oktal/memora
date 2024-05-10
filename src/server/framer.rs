@@ -4,19 +4,16 @@ use tokio_util::codec::{Decoder, Encoder};
 
 use crate::resp::{self, RespError, RespResult};
 
-use super::{
-    error::{MemoraError, MemoraResult},
-    Response,
-};
+use super::{error::MemoraError, Response};
 
 pub struct RespFramer;
 
 impl Decoder for RespFramer {
     type Item = resp::Value;
-    type Error = MemoraError;
+    type Error = RespError;
 
-    fn decode(&mut self, buf: &mut BytesMut) -> MemoraResult<Option<Self::Item>> {
-        let src = std::str::from_utf8(&buf).map_err(|_| MemoraError::Utf8Error)?;
+    fn decode(&mut self, buf: &mut BytesMut) -> RespResult<Option<Self::Item>> {
+        let src = std::str::from_utf8(&buf).map_err(|_| RespError::Utf8Error)?;
         let len = src.len();
 
         match resp::Value::parse(resp::Token::lexer(src)) {
@@ -26,7 +23,7 @@ impl Decoder for RespFramer {
                 Ok(Some(value))
             }
             Ok(None) => Ok(None),
-            Err(e) => Err(MemoraError::Resp(e)),
+            Err(e) => Err(e),
         }
     }
 }

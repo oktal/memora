@@ -26,9 +26,6 @@ pub enum MemoraError {
     #[error(transparent)]
     Encode(#[from] EncodeError),
 
-    #[error("invalid utf-8 sequence")]
-    Utf8Error,
-
     #[error(transparent)]
     Command(#[from] CommandError),
 

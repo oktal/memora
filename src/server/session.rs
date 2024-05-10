@@ -6,7 +6,7 @@ use tracing::{error, info};
 
 use crate::resp::{StringValue, Value};
 
-use super::{cmd::Command, framer::RespFramer, MemoraError, MemoraResult, Request, Response};
+use super::{cmd::Command, framer::RespFramer, MemoraError, MemoraResult, Request};
 
 pub(super) struct Session {
     conn: Framed<tokio::net::TcpStream, RespFramer>,

@@ -18,6 +18,9 @@ pub enum RespError {
     #[error(transparent)]
     Io(#[from] io::Error),
 
+    #[error("invalid utf-8 sequence")]
+    Utf8Error,
+
     #[error("invalid token encoutered")]
     InvalidToken,
 

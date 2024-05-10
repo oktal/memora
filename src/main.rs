@@ -31,7 +31,7 @@ async fn main() -> anyhow::Result<()> {
     let opts = Opts::parse();
     let addr = (DEFAULT_HOSTNAME, opts.port);
     if let Some((host, port)) = opts.replica_of()? {
-        run(addr, server::role::Replica::of(host, port)).await
+        run(addr, server::role::Replica::of(opts.port, host, port)).await
     } else {
         run(addr, server::role::Master::new()).await
     }?;
