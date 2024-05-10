@@ -62,6 +62,11 @@ impl Value {
         Self::Str(StringValue::Bulk(Some(s.into())))
     }
 
+    /// Create a new [`Value`] representing a simple string
+    pub fn simple(s: impl Into<String>) -> Self {
+        Self::Str(StringValue::Simple(s.into()))
+    }
+
     /// Create a new [`Value`] representing a null bulk string
     pub fn null_bulk() -> Self {
         Self::Str(StringValue::Bulk(None))

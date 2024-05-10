@@ -105,6 +105,18 @@ impl<'a> Parser<'a> {
                 };
                 Ok(Some(Value::Str(StringValue::Bulk(bulk))))
             }
+            Token::Plus => {
+                let str = self.try_next()?;
+                let Some(str) = str else {
+                    return Ok(None);
+                };
+
+                let Token::Str(str) = str else {
+                    return Err(RespError::InvalidToken);
+                };
+
+                Ok(Some(Value::Str(StringValue::Simple(str))))
+            }
             _ => todo!(),
         }
     }
@@ -159,5 +171,18 @@ mod tests {
             value,
             Value::from_iter([Value::bulk("echo"), Value::bulk("hey")])
         );
+    }
+
+    #[test]
+    fn parse_simple() {
+        let lex = Token::lexer("+OK\r\n");
+        let mut parser = Parser::new(lex);
+
+        let value = parser
+            .parse_one()
+            .expect("parse value")
+            .expect("parse value");
+
+        assert_eq!(value, Value::simple("OK"))
     }
 }
