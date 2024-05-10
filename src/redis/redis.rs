@@ -132,7 +132,7 @@ impl Role for Master {
     fn info(&self) -> Vec<String> {
         let fields = [
             ("role", "master".to_owned()),
-            ("master_repl_id", self.id.to_string()),
+            ("master_replid", self.id.to_string()),
             ("master_repl_offset", self.offset.to_string()),
         ];
 
