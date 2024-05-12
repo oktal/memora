@@ -40,6 +40,14 @@ impl StringValue {
             _ => None,
         }
     }
+
+    pub fn into_string(self) -> Option<String> {
+        match self {
+            Self::Simple(s) => Some(s),
+            Self::Bulk(s) => s,
+            Self::Null => None,
+        }
+    }
 }
 
 /// A value corresponding to the Redis Serialization Protocol.
@@ -51,6 +59,9 @@ pub enum Value {
 
     /// A string value
     Str(StringValue),
+
+    /// A simple error
+    Error(String),
 
     /// CRLF-terminated string that represents a signed, base-10, 64-bit integer.
     Int(i64),
@@ -65,6 +76,11 @@ impl Value {
     /// Create a new [`Value`] representing a simple string
     pub fn simple(s: impl Into<String>) -> Self {
         Self::Str(StringValue::Simple(s.into()))
+    }
+
+    /// Create a new [`Value`] representing a simple error
+    pub fn error(s: impl Into<String>) -> Self {
+        Self::Error(s.into())
     }
 
     /// Create a new [`Value`] representing a null bulk string
@@ -99,6 +115,8 @@ impl Value {
                 write!(buf, "\r\n")
             }
 
+            Self::Error(s) => Ok(write!(buf, "-{s}\r\n")?),
+
             Self::Int(i) => Ok(write!(buf, "{i}\r\n")?),
         }?;
 
@@ -108,6 +126,13 @@ impl Value {
     pub fn as_str(&self) -> Option<&str> {
         match self {
             Self::Str(str) => str.as_str(),
+            _ => None,
+        }
+    }
+
+    pub fn into_string(self) -> Option<String> {
+        match self {
+            Self::Str(str) => str.into_string(),
             _ => None,
         }
     }

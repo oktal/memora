@@ -5,6 +5,7 @@ use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 use crate::opts::Opts;
 
+mod dispatch;
 mod opts;
 mod resp;
 mod server;
